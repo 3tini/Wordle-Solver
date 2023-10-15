@@ -13,6 +13,36 @@ $SCRIPT:WebRequest                   = Invoke-WebRequest -Uri "https://www.nytim
 $SCRIPT:JS                           = Invoke-WebRequest -Uri ($SCRIPT:WebRequest.ParsedHtml.getElementsByTagName('script') | ? {$_.src -match "/games-assets/v2/wordle"}).src
 $SCRIPT:WORDLIST                     = ($SCRIPT:JS.RawContent | sls "(?<=ia=\[)(.*?)(?=\])").Matches.Value -split ',' -replace '"'
 
+$Occurences = @{}
+foreach ($word in $SCRIPT:WORDLIST) {
+    foreach ($letter in $word.ToCharArray()) {
+        $letter = [String]$letter
+
+        if ($Occurences[$letter]) {
+            $Occurences[$letter] = $Occurences[$letter] + 1
+        } else {
+            $Occurences[$letter] = 1
+        }
+    }
+}
+
+$TotalLetters = ($Occurences.Values | Measure -Sum).Sum
+
+$LetterWeightings = @{}
+foreach ($letter in $Occurences.Keys) {
+    $LetterWeightings[$letter] = ($Occurences[$letter] / $TotalLetters) * 100
+}
+
+$WordRankings = @{}
+foreach ($word in $SCRIPT:WORDLIST) {
+    $WordRankings[$word] = 0
+    foreach ($letter in $word.ToCharArray() | Select -Unique) {
+        $letter = [String]$letter
+        $WordRankings[$word] += $LetterWeightings[$letter]
+    }
+}
+$SCRIPT:WORDRANKINGS = $WordRankings                   
+
 Function Enumerate-Controls($Object) {
     foreach ($Control in $Object.Controls) {
         $SCRIPT:CONTROLS += $Control
@@ -130,11 +160,11 @@ Function Add-WordsToRichTextBoxes($Word) {
     $RTB2_Rows = ($RTB2.Text -split "`r`n").Length
     $RTB3_Rows = ($RTB3.Text -split "`r`n").Length
 
-    if ($RTB1_Rows -lt 18) {
+    if ($RTB1_Rows -le 18) {
         $RTB1.Text += "• $Word`r`n"
-    } elseif ($RTB2_Rows -lt 18) {
+    } elseif ($RTB2_Rows -le 18) {
         $RTB2.Text += "• $Word`r`n"
-    } elseif ($RTB3_Rows -lt 18) {
+    } elseif ($RTB3_Rows -le 18) {
         $RTB3.Text += "• $Word`r`n"
     }
 }
@@ -162,7 +192,7 @@ Function Calculate-PossibleWords {
 
     $LettersNotInWord = $SCRIPT:CONTROLS | ? {[String]$_.GetType() -eq 'System.Windows.Forms.Label'} | ? {$_.BackColor -eq $SCRIPT:DEFAULT_COLOR_NOT_IN_WORD}
 
-    if ($LettersNotInWord.Length -eq 0) { return }
+    #if ($LettersNotInWord.Length -eq 0) { return }
 
     $LettersNotInWord | % {
         $Column1InvalidLetters += $_.Text
@@ -200,19 +230,23 @@ Function Calculate-PossibleWords {
         }
     }
 
-    if ($Column1) { $R_C1 = $Column1 } else { $R_C1 = "[^$Column1InvalidLetters]" }
-    if ($Column2) { $R_C2 = $Column2 } else { $R_C2 = "[^$Column2InvalidLetters]" }
-    if ($Column3) { $R_C3 = $Column3 } else { $R_C3 = "[^$Column3InvalidLetters]" }
-    if ($Column4) { $R_C4 = $Column4 } else { $R_C4 = "[^$Column4InvalidLetters]" }
-    if ($Column5) { $R_C5 = $Column5 } else { $R_C5 = "[^$Column5InvalidLetters]" }
+    if ($Column1) { $R_C1 = $Column1 } else { if ($Column1InvalidLetters.Length -gt 0) { $R_C1 = "[^$Column1InvalidLetters]" } else { $R_C1 = "" } }
+    if ($Column2) { $R_C2 = $Column2 } else { if ($Column2InvalidLetters.Length -gt 0) { $R_C2 = "[^$Column2InvalidLetters]" } else { $R_C2 = "" } }
+    if ($Column3) { $R_C3 = $Column3 } else { if ($Column3InvalidLetters.Length -gt 0) { $R_C3 = "[^$Column3InvalidLetters]" } else { $R_C3 = "" } }
+    if ($Column4) { $R_C4 = $Column4 } else { if ($Column4InvalidLetters.Length -gt 0) { $R_C4 = "[^$Column4InvalidLetters]" } else { $R_C4 = "" } }
+    if ($Column5) { $R_C5 = $Column5 } else { if ($Column5InvalidLetters.Length -gt 0) { $R_C5 = "[^$Column5InvalidLetters]" } else { $R_C5 = "" } }
     
     $Regex = "$R_C1$R_C2$R_C3$R_C4$R_C5"
 
     $LettersInWrongSpot | % {
         [String]$LettersInWord += $_.Text
     }
+    $LettersInWord = ($LettersInWord.ToCharArray() | Select -Unique) -join ""
 
     Switch ($LettersInWord.ToCharArray().Length) {
+        0 {
+            $PossibleWords = $SCRIPT:WORDLIST | ? { $_.Length -eq 5} | ? {$_ -match "$Regex"}
+        }
         1 {
             $indexA = $LettersInWord.ToCharArray()[0]
             $PossibleWords = $SCRIPT:WORDLIST | ? { $_.Length -eq 5} | ? {$_ -match "$Regex"} | ? {$_ -match $indexA}
@@ -246,8 +280,9 @@ Function Calculate-PossibleWords {
     }
 
     Clear-RichTextBoxes
+    $PossibleWords = $PossibleWords | Sort-Object @{ Expression = { $SCRIPT:WORDRANKINGS[$_] } } -Descending | Select -First 54
     foreach ($Word in $PossibleWords) {
-        Add-WordsToRichTextBoxes -Word $Word
+        Add-WordsToRichTextBoxes -Word "$Word"
     }
 }
 
@@ -611,6 +646,5 @@ $SCRIPT:CONTROLS | ? {$_.Name -match "^lbl_R"} | % {
 }
 
 $Form.Add_KeyUp($lbl_KeyPressed)
-
 
 [void]$Form.ShowDialog()
